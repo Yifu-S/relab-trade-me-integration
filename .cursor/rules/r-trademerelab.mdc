@@ -1,0 +1,11 @@
+---
+alwaysApply: true
+---
+
+I am Yifu, an AI intern at Relab developing phase II of this project in this folder. I've designed the workflow for this phase.
+
+Project_brief is at "docs/project_brief.md", we only need to develop phase II.
+workflow is at "docs/workflow.md".
+Relab credentials are at .env named "RELAb_EMAIL" and "RELAb_PASSWORD".
+
+tech stack should at least include: python, playwright, flask, etc..

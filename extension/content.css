@@ -1,0 +1,427 @@
+/* Relab Trade Me Integration Styles */
+
+/* Analysis Button */
+.relab-analyze-button {
+  background: linear-gradient(135deg, #2ecc71 0%, #27ae60 100%);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 12px 20px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 8px rgba(46, 204, 113, 0.3);
+}
+
+.relab-analyze-button:hover {
+  background: linear-gradient(135deg, #27ae60 0%, #229954 100%);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(46, 204, 113, 0.4);
+}
+
+.relab-analyze-button:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.relab-icon {
+  font-size: 16px;
+}
+
+/* Modal Styles */
+.relab-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 10000;
+  animation: fadeIn 0.3s ease;
+}
+
+.relab-modal-content {
+  background: white;
+  border-radius: 12px;
+  width: 90%;
+  max-width: 800px;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+  animation: slideIn 0.3s ease;
+}
+
+.relab-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px 24px;
+  border-bottom: 1px solid #e0e0e0;
+  background: linear-gradient(135deg, #2ecc71 0%, #27ae60 100%);
+  color: white;
+  border-radius: 12px 12px 0 0;
+}
+
+.relab-modal-header h3 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.relab-modal-close {
+  background: none;
+  border: none;
+  color: white;
+  font-size: 24px;
+  cursor: pointer;
+  padding: 0;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: background 0.3s ease;
+}
+
+.relab-modal-close:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.relab-modal-body {
+  padding: 24px;
+}
+
+.relab-modal-footer {
+  padding: 20px 24px;
+  border-top: 1px solid #e0e0e0;
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+}
+
+/* Relab Data Layout */
+.relab-data-main {
+  margin-bottom: 24px;
+}
+
+.relab-data-main h4 {
+  margin: 0 0 16px 0;
+  color: #333;
+  font-size: 18px;
+}
+
+.relab-data-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.relab-data-item {
+  background: #f8f9fa;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  padding: 12px;
+  font-size: 14px;
+  color: #555;
+}
+
+.relab-data-item strong {
+  color: #333;
+  display: block;
+  margin-bottom: 4px;
+}
+
+.relab-property-link {
+  text-align: center;
+  margin-top: 20px;
+}
+
+.relab-link-btn {
+  display: inline-block;
+  background: linear-gradient(135deg, #2ecc71 0%, #27ae60 100%);
+  color: white;
+  text-decoration: none;
+  padding: 12px 24px;
+  border-radius: 6px;
+  font-weight: 600;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 8px rgba(46, 204, 113, 0.3);
+}
+
+.relab-link-btn:hover {
+  background: linear-gradient(135deg, #27ae60 0%, #229954 100%);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(46, 204, 113, 0.4);
+  color: white;
+  text-decoration: none;
+}
+
+/* CMA Analysis Styles */
+.relab-cma-section {
+  border-top: 2px solid #e0e0e0;
+  padding-top: 20px;
+}
+
+.relab-cma-section h4 {
+  margin: 0 0 16px 0;
+  color: #333;
+  font-size: 18px;
+}
+
+.relab-valuation-highlight {
+  background: linear-gradient(135deg, #2ecc71 0%, #27ae60 100%);
+  color: white;
+  padding: 16px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+}
+
+.relab-valuation-range,
+.relab-valuation-mid,
+.relab-confidence {
+  text-align: center;
+}
+
+.relab-valuation-range strong,
+.relab-valuation-mid strong,
+.relab-confidence strong {
+  display: block;
+  font-size: 12px;
+  opacity: 0.9;
+  margin-bottom: 4px;
+}
+
+.relab-benchmarks {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.relab-benchmark {
+  background: #f8f9fa;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  padding: 12px;
+  text-align: center;
+  font-size: 14px;
+}
+
+.relab-benchmark strong {
+  display: block;
+  color: #333;
+  margin-bottom: 4px;
+}
+
+.relab-recommendation {
+  background: #e3f2fd;
+  border: 1px solid #2196f3;
+  border-radius: 6px;
+  padding: 12px;
+  font-size: 14px;
+  color: #1976d2;
+}
+
+/* Button Styles */
+.relab-btn {
+  padding: 10px 16px;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.relab-btn-primary {
+  background: linear-gradient(135deg, #2ecc71 0%, #27ae60 100%);
+  color: white;
+}
+
+.relab-btn-primary:hover {
+  background: linear-gradient(135deg, #27ae60 0%, #229954 100%);
+  transform: translateY(-1px);
+}
+
+.relab-btn-secondary {
+  background: #f8f9fa;
+  color: #333;
+  border: 1px solid #e0e0e0;
+}
+
+.relab-btn-secondary:hover {
+  background: #e9ecef;
+  border-color: #adb5bd;
+}
+
+/* AI Report Styles */
+.relab-ai-report {
+  border-top: 2px solid #e0e0e0;
+  padding-top: 20px;
+  margin-top: 20px;
+}
+
+.relab-ai-report h4 {
+  margin: 0 0 16px 0;
+  color: #333;
+  font-size: 18px;
+}
+
+.relab-ai-recommendations,
+.relab-ai-risks {
+  margin: 16px 0;
+}
+
+.relab-ai-recommendations h5,
+.relab-ai-risks h5 {
+  margin: 0 0 8px 0;
+  color: #333;
+  font-size: 14px;
+}
+
+.relab-ai-recommendations ul,
+.relab-ai-risks ul {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 14px;
+  color: #555;
+}
+
+.relab-ai-recommendations li,
+.relab-ai-risks li {
+  margin: 4px 0;
+}
+
+/* Error and Notification Styles */
+.relab-error,
+.relab-notification {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 10001;
+  animation: slideInRight 0.3s ease;
+}
+
+.relab-error-content,
+.relab-notification-content {
+  background: white;
+  border-radius: 8px;
+  padding: 12px 16px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 300px;
+}
+
+.relab-error-content {
+  border-left: 4px solid #f44336;
+}
+
+.relab-notification-content {
+  border-left: 4px solid #4caf50;
+}
+
+.relab-error-content button,
+.relab-notification-content button {
+  background: none;
+  border: none;
+  font-size: 18px;
+  cursor: pointer;
+  padding: 0;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: background 0.3s ease;
+}
+
+.relab-error-content button:hover,
+.relab-notification-content button:hover {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .relab-split-screen {
+    flex-direction: column;
+  }
+
+  .relab-modal-content {
+    width: 95%;
+    margin: 20px;
+  }
+
+  .relab-modal-footer {
+    flex-direction: column;
+  }
+
+  .relab-valuation-highlight {
+    grid-template-columns: 1fr;
+  }
+
+  .relab-benchmarks {
+    grid-template-columns: 1fr;
+  }
+
+  .relab-error,
+  .relab-notification {
+    left: 20px;
+    right: 20px;
+  }
+
+  .relab-error-content,
+  .relab-notification-content {
+    min-width: auto;
+  }
+}

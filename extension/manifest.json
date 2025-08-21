@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "Relab Trade Me Integration",
+  "version": "1.0",
+  "description": "Integrate Relab property analysis with Trade Me listings",
+  "permissions": ["activeTab", "storage", "scripting"],
+  "host_permissions": [
+    "https://www.trademe.co.nz/*",
+    "http://localhost:5000/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.trademe.co.nz/property/*",
+        "https://www.trademe.co.nz/a/property/*"
+      ],
+      "js": ["content.js"],
+      "css": ["content.css"]
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Relab Integration"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
