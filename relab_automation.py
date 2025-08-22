@@ -59,19 +59,28 @@ class RelabAutomation:
                 )
 
                 # Wait for login form to load with shorter timeout
-                await self.page.wait_for_selector('input[name="email"]', timeout=15000)
+                await self.page.wait_for_selector('input[name="input-username"]', timeout=15000)
                 await self.page.wait_for_selector(
-                    'input[name="password"]', timeout=15000
+                    'input[name="input-password"]', timeout=15000
                 )
 
                 # Clear and fill login form
-                await self.page.fill('input[name="email"]', "")
-                await self.page.fill('input[name="email"]', self.email)
-                await self.page.fill('input[name="password"]', "")
-                await self.page.fill('input[name="password"]', self.password)
+                logger.info(f"Filling username: {self.email}")
+                await self.page.fill('input[name="input-username"]', "")
+                await self.page.fill('input[name="input-username"]', self.email)
+                
+                logger.info("Filling password")
+                await self.page.fill('input[name="input-password"]', "")
+                await self.page.fill('input[name="input-password"]', self.password)
+                
+                # Wait a moment for form to be ready
+                await self.page.wait_for_timeout(1000)
 
-                # Click login button
-                login_button = await self.page.query_selector('button[type="submit"]')
+                # Click login button using the correct selector
+                login_button = await self.page.query_selector('button.login-btn.v-btn.v-btn--block.v-btn--is-elevated.v-btn--has-bg.theme--light.v-size--default.gradient')
+                if not login_button:
+                    # Fallback selectors
+                    login_button = await self.page.query_selector('button[type="submit"]')
                 if not login_button:
                     login_button = await self.page.query_selector(
                         'button:has-text("Login")'
@@ -82,7 +91,14 @@ class RelabAutomation:
                     )
 
                 if login_button:
+                    logger.info("Found login button, clicking...")
+                    # Wait for button to be clickable
+                    await login_button.wait_for_element_state("enabled", timeout=5000)
                     await login_button.click()
+                    logger.info("Login button clicked")
+                else:
+                    logger.error("Login button not found")
+                    raise Exception("Login button not found")
 
                     # Wait for successful login (redirect to dashboard or home page)
                 try:
