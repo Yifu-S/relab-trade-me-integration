@@ -854,13 +854,14 @@ class RelabAutomation:
         try:
             print(f"🔍 DEBUG: search_property_sync called with address: {address}")
             logger.info(f"Starting sync property search for: {address}")
-            # For now, return fallback data to avoid infinite loops
-            # In production, this would use the async method
-            print("🔍 DEBUG: Using fallback data for demo purposes")
-            logger.info("Using fallback data for demo purposes")
-            result = self.get_fallback_data(address)
+            # Use real async method with timeout
+            result = asyncio.run(asyncio.wait_for(self.search_property(address), timeout=120))
             print(f"🔍 DEBUG: search_property_sync returning: {result}")
             return result
+        except asyncio.TimeoutError:
+            print(f"🔍 DEBUG: Timeout in search_property_sync for address: {address}")
+            logger.error(f"Timeout in sync property search for: {address}")
+            return self.get_fallback_data(address)
         except Exception as e:
             print(f"🔍 DEBUG: Error in search_property_sync: {e}")
             logger.error(f"Sync property search failed: {e}")
@@ -871,13 +872,14 @@ class RelabAutomation:
         try:
             print(f"🔍 DEBUG: run_cma_sync called with property_data: {property_data}")
             logger.info("Starting sync CMA analysis")
-            # For now, return fallback CMA to avoid infinite loops
-            # In production, this would use the async method
-            print("🔍 DEBUG: Using fallback CMA for demo purposes")
-            logger.info("Using fallback CMA for demo purposes")
-            result = self.get_fallback_cma()
+            # Use real async method with timeout
+            result = asyncio.run(asyncio.wait_for(self.run_cma(property_data), timeout=180))
             print(f"🔍 DEBUG: run_cma_sync returning: {result}")
             return result
+        except asyncio.TimeoutError:
+            print(f"🔍 DEBUG: Timeout in run_cma_sync")
+            logger.error("Timeout in sync CMA analysis")
+            return self.get_fallback_cma()
         except Exception as e:
             print(f"🔍 DEBUG: Error in run_cma_sync: {e}")
             logger.error(f"Sync CMA analysis failed: {e}")
