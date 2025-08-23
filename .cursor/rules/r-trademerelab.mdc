@@ -1,7 +1,6 @@
 ---
-alwaysApply: true
+alwaysApply: false
 ---
-
 I am Yifu, an AI intern at Relab developing phase II of this project in this folder. I've designed the workflow for this phase.
 
 Project_brief is at "docs/project_brief.md", we only need to develop phase II.
