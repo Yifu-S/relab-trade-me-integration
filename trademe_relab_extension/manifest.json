@@ -1,0 +1,31 @@
+{
+    "manifest_version": 3,
+    "name": "Trade Me Relab Assistant",
+    "version": "1.0",
+    "description": "Integrates Relab due diligence data into Trade Me property listings.",
+    "permissions": [
+        "activeTab",
+        "scripting"
+    ],
+    "host_permissions": [
+        "https://www.trademe.co.nz/a/property/residential/*",
+        "http://127.0.0.1:5000/*"
+    ],
+    "action": {
+        "default_popup": "popup.html",
+        "default_title": "Trade Me Relab Assistant"
+    },
+    "content_scripts": [
+        {
+            "matches": [
+                "https://www.trademe.co.nz/a/property/residential/*"
+            ],
+            "js": [
+                "content.js"
+            ],
+            "css": [
+                "content.css"
+            ]
+        }
+    ]
+}

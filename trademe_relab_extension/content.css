@@ -1,0 +1,89 @@
+/* content.css */
+#relab-assistant-panel {
+    position: fixed;
+    top: 50px;
+    right: 10px;
+    width: 400px;
+    max-height: 80vh;
+    background-color: #fff;
+    border: 1px solid #ccc;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    z-index: 9999;
+    font-family: Arial, sans-serif;
+    overflow-y: auto;
+}
+
+#relab-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px;
+    background-color: #f5f5f5;
+    border-bottom: 1px solid #ddd;
+}
+
+#relab-header h3 {
+    margin: 0;
+    font-size: 16px;
+}
+
+#relab-close-btn {
+    background: none;
+    border: 1px solid #999;
+    border-radius: 3px;
+    cursor: pointer;
+    padding: 2px 6px;
+}
+
+#relab-content {
+    padding: 15px;
+}
+
+#relab-fetch-btn,
+#relab-save-btn {
+    padding: 8px 15px;
+    background-color: #28a745;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+}
+
+#relab-fetch-btn:hover,
+#relab-save-btn:hover {
+    background-color: #218838;
+}
+
+#relab-loading {
+    font-style: italic;
+    color: #666;
+}
+
+#relab-results {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid #eee;
+}
+
+#relab-results ul {
+    padding-left: 20px;
+}
+
+#relab-results li {
+    margin-bottom: 5px;
+}
+
+#relab-open-panel-btn {
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    width: 180px;
+    padding: 10px;
+    background-color: #007bff;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    z-index: 10000;
+    cursor: pointer;
+}
