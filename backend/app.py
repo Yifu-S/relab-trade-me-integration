@@ -11,7 +11,6 @@ from playwright.async_api import async_playwright
 import random
 from datetime import datetime, timezone, timedelta
 import math
-from playwright_stealth import Stealth
 
 # --- Load environment variables ---
 load_dotenv()
@@ -146,6 +145,73 @@ def parse_land_title(text: str) -> str:
         return match.group(1).strip()
     return ""
 
+def parse_list_date(date_text: str) -> str:
+    """Parses 'Listed: Mon, 4 Aug' or 'Listed: Today' into 'dd/mm/yyyy'."""
+    if not date_text:
+        return None
+    date_text = date_text.strip()
+    try:
+        if "today" in date_text.lower():
+            # Return today's date formatted as dd/mm/yyyy
+            return (
+                datetime.now(timezone(timedelta(hours=12)))
+                .astimezone(timezone.utc)
+                .strftime("%d/%m/%Y")
+            )
+        elif "yesterday" in date_text.lower():
+            # Return yesterday's date formatted as dd/mm/yyyy
+            return (
+                datetime.now(timezone(timedelta(hours=12))).astimezone(timezone.utc)
+                - timedelta(days=1)
+            ).strftime("%d/%m/%Y")
+        else:
+            # Assume format like "Listed: Mon, 4 Aug"
+            # Remove "Listed:" prefix
+            date_part = date_text.split(":", 1)[1].strip()  # Split on first ':'
+            # Parse the date string like "Mon, 4 Aug"
+            current_date = datetime.now(timezone(timedelta(hours=12))).astimezone(
+                timezone.utc
+            )
+            current_year = current_date.year
+
+            # Try current year first
+            try:
+                parsed_date = datetime.strptime(
+                    f"{date_part} {current_year}", "%a, %d %b %Y"
+                )
+
+                # Make parsed_date timezone-aware for comparison
+                parsed_date = parsed_date.replace(tzinfo=timezone(timedelta(hours=12)))
+
+                # If the parsed date is in the future (e.g., Sep 15 when today is Aug 25),
+                # it means the listing is from last year
+                if parsed_date > current_date:
+                    parsed_date = datetime.strptime(
+                        f"{date_part} {current_year - 1}", "%a, %d %b %Y"
+                    )
+                    parsed_date = parsed_date.replace(
+                        tzinfo=timezone(timedelta(hours=12))
+                    )
+
+                return parsed_date.strftime("%d/%m/%Y")
+            except ValueError:
+                # If current year fails, try previous year
+                try:
+                    parsed_date = datetime.strptime(
+                        f"{date_part} {current_year - 1}", "%a, %d %b %Y"
+                    )
+                    parsed_date = parsed_date.replace(
+                        tzinfo=timezone(timedelta(hours=12))
+                    )
+                    return parsed_date.strftime("%d/%m/%Y")
+                except ValueError:
+                    # If both fail, return None
+                    return None
+
+    except Exception as e:
+        print(f"\n⚠️ Error parsing list date '{date_text}': {e}")
+        return None
+
 
 async def select_from_dropdown(page, dropdown_locator, option_text: str):
     """
@@ -161,16 +227,38 @@ async def select_from_dropdown(page, dropdown_locator, option_text: str):
     await dropdown_locator.click()
     logger.info("clicking dropdown")
     # Wait briefly for options to render
-    await page.wait_for_timeout(1000)
+    await page.wait_for_timeout(500)
     logger.info(f"clicking text {option_text}")
-    # Click the desired option
-    option = page.locator(
-        "div[role='listbox'] .v-list-item__title", has_text=option_text
-    )
 
-    await option.click()
-    logger.info("clicked text")
-    return option_text
+    # Click the desired option
+    menu = page.locator("div.v-menu__content.menuable__content__active").first
+    option = menu.locator("div.v-list-item__title", has_text=option_text).first
+    max_attempts = 3
+    for _ in range(max_attempts):
+        if await option.is_visible():
+            await option.click()
+            logger.info("clicked text")
+            await page.wait_for_selector(
+                "div.text-start.p-1.col.col-12",
+                state="visible",
+                timeout=10000,
+            )  # CMA page selector
+            return
+        # scroll
+        await menu.evaluate("(menu) => menu.scrollBy(0, 100)")
+        await page.wait_for_timeout(200)  # small delay for UI update
+
+    raise Exception(f"Option '{option_text}' not found after scrolling")
+
+def normalize_number(val: str):
+    """Convert '2.475M', '500k', '10,507', '9710' into a float"""
+    val = val.replace(",", "").upper()
+    if val.endswith("M"):
+        return float(val[:-1]) * 1_000_000
+    elif val.endswith("K"):
+        return float(val[:-1]) * 1_000
+    else:
+        return float(val)
 
 
 # --- End Helper Functions for CMA ---
@@ -433,14 +521,13 @@ async def perform_cma_analysis(page, subject_property_data):
     """
     cma_data = {
         "CMA_Status": "Not Started",
-        "CMA_Comparables_Count": 0,
-        "CMA_Comparables_Details": [],
+        "CMA_Comparable_Count": 0,
         "CMA_Benchmark_1_Avg_Sale_CV_Ratio": None,
-        "CMA_Benchmark_1_Valuation": "N/A",
+        "CMA_Benchmark_1_Estimated_Sale": "N/A",
         "CMA_Benchmark_2_Avg_Floor_$PerSqm": None,
-        "CMA_Benchmark_2_Valuation": "N/A",
+        "CMA_Benchmark_2_Estimated_Value_via_Floor": "N/A",
         "CMA_Benchmark_3_Avg_Land_$PerSqm": None,
-        "CMA_Benchmark_3_Valuation": "N/A",
+        "CMA_Benchmark_3_Estimated_Value_via_Land": "N/A",
         "CMA_Filter_Settings_Used": {},
         "CMA_Iterations_Performed": 0,
     }
@@ -467,10 +554,26 @@ async def perform_cma_analysis(page, subject_property_data):
             cma_data["CMA_Status"] = "Failed: CMA button not found"
             return cma_data
 
+        logger.info("Locate the whole slider element")
+        slider = page.locator("div.v-slider")
+
+        logger.info("Get its bounding box")
+        box = await slider.bounding_box()
+        logger.info("Click near the right edge (a few pixels in to avoid missing)")
+        x = box["x"] + box["width"] - 2
+        y = box["y"] + box["height"] / 2
+
+        await page.mouse.click(x, y)
+        logger.info("done")
+        await page.wait_for_selector(
+            "div.text-start.p-1.col.col-12",
+            state="visible",
+        )
+
         logger.info("Locating expand tab")
         expand_button = page.locator("div.cursor-pointer:has(span:text('Expand'))")
         logger.info("Found expand tab")
-        await page.wait_for_timeout(random.uniform(3000, 5000))
+        await page.wait_for_timeout(random.uniform(1000, 2000))
         if await expand_button.count() > 0:
             await expand_button.click()
             logger.info("Clicked Expand button. Waiting for Expand page to load...")
@@ -513,7 +616,7 @@ async def perform_cma_analysis(page, subject_property_data):
         initial_tolerance_percent = 20.0  # 20%
         tolerance_step_percent = 5.0  # 5% step for adjustment
         target_min_comps = 5
-        target_max_comps = 10
+        target_max_comps = 15
         max_iterations = 5  # Prevent infinite loops
         iteration_count = 0
 
@@ -528,10 +631,10 @@ async def perform_cma_analysis(page, subject_property_data):
         bedrooms_max = subject_bedrooms + 1 if subject_bedrooms is not None else None
         bathrooms_min = subject_bathrooms - 1 if subject_bathrooms is not None else None
         bathrooms_max = subject_bathrooms + 1 if subject_bathrooms is not None else None
-        build_year_min = (
+        year_built_min = (
             subject_year_built - 10 if subject_year_built is not None else None
         )
-        build_year_max = (
+        year_built_max = (
             subject_year_built + 10 if subject_year_built is not None else None
         )
 
@@ -554,7 +657,7 @@ async def perform_cma_analysis(page, subject_property_data):
                 subject_floor_area_sqm: {subject_floor_area_sqm}, floor_area_min: {floor_area_min}, floor_area_max: {floor_area_max}, \
                 subject_bedrooms: {subject_bedrooms}, bedrooms_min: {bedrooms_min}, bedrooms_max: {bedrooms_max}, \
                 subject_bathrooms: {subject_bathrooms}, bathrooms_min: {bathrooms_min}, bedrooms_max: {bathrooms_max}, \
-                subject_year_built: {subject_year_built}, build_year_min: {build_year_min}, build_year_max: {build_year_max},"
+                subject_year_built: {subject_year_built}, year_built_min: {year_built_min}, year_built_max: {year_built_max},"
         )
 
         # --- 4. Iterative Filtering Loop ---
@@ -570,7 +673,7 @@ async def perform_cma_analysis(page, subject_property_data):
             # 1. Locate the dropdown element
             land_title_dropdown = page.locator(
                 f"div:has(span.form-label:has-text('Land title')) div.v-select__selection:has-text('{prev_land_title}')"
-            )
+            ).first
 
             if await land_title_dropdown.count() > 0:
                 logger.info("Found land title dropdown...")
@@ -578,16 +681,11 @@ async def perform_cma_analysis(page, subject_property_data):
                     await select_from_dropdown(
                         page, land_title_dropdown, subject_land_title
                     )
-                    await land_title_dropdown.click()
                     logger.info("Clicked land title dropdown...")
                     await page.wait_for_timeout(
                         1000
                     )  # Brief wait for options to appear
-                    # Find the specific option element by its text content and click it
-                    next_land_title_button = await page.locator(
-                        "div[role='listbox'] .v-list-item__title",
-                        has_text=subject_land_title,
-                    )
+
                     prev_land_title = subject_land_title
                     logger.info("Done")
                     # Clicking the option often closes the dropdown automatically
@@ -602,31 +700,24 @@ async def perform_cma_analysis(page, subject_property_data):
                 else:
                     logger.warning("Land Title dropdown element not found on page.")
 
-            # --- Example: Handling Floor Area Min/Max Dropdowns ---
+            await page.wait_for_timeout(
+                1000
+            )
+
+            await page.wait_for_selector(
+                "div.text-start.p-1.col.col-12",
+                state="visible",
+                timeout=10000,
+            )
+
+            # --- Handling Floor Area Min/Max Dropdowns ---
             logger.info("Applying floor area filters...")
-            floor_area_min_selector = page.locator(
-                f"div:has(span.form-label:has-text('Land area')) div.v-select__selection:has-text({prev_floor_area_min})"
-            )
-            floor_area_max_selector = page.locator(
-                f"div:has(span.form-label:has-text('Land area')) div.v-select__selection:has-text({prev_floor_area_max})"
-            )
-            logger.info("Found floor area dropdowns...")
 
             # Define the available boundary options for Floor Area (from inspection)
             # MAKE SURE THIS LIST MATCHES THE ACTUAL OPTIONS IN THE RELAB DROPDOWN
             # AND IS SORTED ASCENDINGLY
-            FLOOR_AREA_BOUNDARIES_M2 = [
-                50.0,
-                75.0,
-                100.0,
-                125.0,
-                150.0,
-                175.0,
-                200.0,
-                250.0,
-                300.0,
-                400.0,
-                500.0,
+            floor_area_options = [
+                50, 75, 100, 125, 150, 175, 200, 250, 300, 400, 500,
             ]
 
             if floor_area_min is not None and floor_area_max is not None:
@@ -635,114 +726,493 @@ async def perform_cma_analysis(page, subject_property_data):
                     # --- Select Floor Area Min ---
                     # Find the closest available *lower* boundary for the *minimum*
                     closest_floor_area_min_option = find_closest_boundary_option(
-                        floor_area_min, FLOOR_AREA_BOUNDARIES_M2, is_upper_bound=False
+                        floor_area_min, floor_area_options, is_upper_bound=False
                     )
-                    await floor_area_min_selector.click()
-                    await page.wait_for_timeout(500)
-                    if closest_floor_area_min_option is not None:
-                        option = page.locator(
-                            "div[role='option'] .v-list-item__title",
-                            has_text=str(closest_floor_area_min_option),
-                        )
-                        await option.scroll_into_view_if_needed()
-                        await option.click()
-                        await page.wait_for_timeout(500)
-                        logger.debug(
-                            f"Selected Floor Area Min: {closest_floor_area_min_option} m² (requested >= {floor_area_min} m²)"
-                        )
-                        prev_floor_area_min = f"{closest_floor_area_min_option} m²"
-                    else:
-                        option = page.locator(
-                            "div[role='option'] .v-list-item__title",
-                            has_text=str(closest_floor_area_min_option),
-                        )
-                        await option.scroll_into_view_if_needed()
-                        await option.click()
-                        await page.wait_for_timeout(500)
-                        logger.debug(
-                            f"Selected Floor Area Min: Any (requested >= {floor_area_min} m²)"
-                        )
-                        prev_floor_area_min = "Any"
-                    logger.info("Done")
+                    logger.info(f"Closest floor area boundaries option: {closest_floor_area_min_option} for {floor_area_min}")
 
-                    # --- Select Floor Area Max ---
-                    # Find the closest available *upper* boundary for the *maximum*
-                    closest_floor_area_max_option = find_closest_boundary_option(
-                        floor_area_max, FLOOR_AREA_BOUNDARIES_M2, is_upper_bound=True
+                    floor_area_dropdown = page.locator(
+                        f"label:text('Floor area') >> xpath=following-sibling::div//div[contains(@class, 'v-select__selection') and text()='{prev_floor_area_min}']"
                     )
-                    if closest_floor_area_max_option is not None:
-                        # Select the option by its value or label
-                        # Example using value attribute:
-                        await page.select_option(
-                            floor_area_max_selector,
-                            value=str(int(closest_floor_area_max_option)),
-                        )
-                        # Example using label text:
-                        # await page.select_option(floor_area_max_selector, label=f"{int(closest_floor_area_max_option)}m²")
-                        logger.debug(
-                            f"Selected Floor Area Max: {closest_floor_area_max_option} m² (requested <= {floor_area_max} m²)"
-                        )
+
+                    logger.info(f"Floor area dropdown found")
+
+                    if await floor_area_dropdown.count() > 0:
+                        logger.info("Found floor area dropdown...")
+                        try:
+                            await select_from_dropdown(
+                                page, floor_area_dropdown, str(closest_floor_area_min_option)
+                            )
+                            logger.info("Clicked floor area min dropdown...")
+                            await page.wait_for_timeout(
+                                1000
+                            )  # Brief wait for options to appear
+
+                            prev_floor_area_min = closest_floor_area_min_option
+                            logger.info("Done")
+                            # Clicking the option often closes the dropdown automatically
+
+                        except Exception as dropdown_error:
+                            logger.error(
+                                f"Error selecting Floor area '{subject_floor_area_sqm}' from dropdown: {dropdown_error}"
+                            )
                     else:
-                        logger.warning(
-                            f"Could not find suitable Floor Area Max option for requested {floor_area_max} m²"
-                        )
+                        if not subject_floor_area_sqm:
+                            logger.info("No Floor area to filter by.")
+                        else:
+                            logger.warning("Floor area dropdown element not found on page.")
+                    await page.wait_for_timeout(2000)
+                    # --- Select Floor Area Max ---
+                    # Find the closest available *lower* boundary for the *maximum*
+                    closest_floor_area_max_option = find_closest_boundary_option(
+                        floor_area_max, floor_area_options, is_upper_bound=True
+                    )
+                    logger.info(
+                        f"Closest floor area boundaries option: {closest_floor_area_max_option} for {floor_area_max}")
+
+                    floor_area_dropdown = page.locator(
+                        f"label:text('Floor area') >> xpath=following-sibling::div//div[contains(@class, 'v-select__selection') and text()='{prev_floor_area_max}']"
+                    )
+
+                    logger.info(f"Floor area dropdown found")
+
+                    if await floor_area_dropdown.count() > 0:
+                        logger.info("Found floor area dropdown...")
+                        try:
+                            await select_from_dropdown(
+                                page, floor_area_dropdown, str(closest_floor_area_max_option)
+                            )
+                            logger.info("Clicked floor area max dropdown...")
+                            await page.wait_for_timeout(
+                                1000
+                            )  # Brief wait for options to appear
+
+                            prev_floor_area_max = closest_floor_area_max_option
+                            logger.info("Done")
+                            # Clicking the option often closes the dropdown automatically
+
+                        except Exception as dropdown_error:
+                            logger.error(
+                                f"Error selecting Floor area '{subject_floor_area_sqm}' from dropdown: {dropdown_error}"
+                            )
+                    else:
+                        if not subject_floor_area_sqm:
+                            logger.info("No Floor area to filter by.")
+                        else:
+                            logger.warning("Floor area dropdown element not found on page.")
+                    await page.wait_for_timeout(1000)
 
                 except Exception as fa_error:
                     logger.error(f"Error setting Floor Area filters: {fa_error}")
 
-            # --- Example: Handling Sale Date Range Dropdown (e.g., "Last 12 months") ---
-            sale_date_dropdown_selector = (
-                "select#sale-date-range-selector"  # ADJUST THIS SELECTOR
-            )
-            sale_date_dropdown = page.locator(sale_date_dropdown_selector)
-            preset_text = "Last 12 months"  # The text of the option you want to select
+            # --- Handling Bedroom Min/Max Dropdowns ---
+            logger.info("Applying bedroom filters...")
 
-            if await sale_date_dropdown.count() > 0:
+            # Define the available boundary options for Floor Area (from inspection)
+            # MAKE SURE THIS LIST MATCHES THE ACTUAL OPTIONS IN THE RELAB DROPDOWN
+            # AND IS SORTED ASCENDINGLY
+            bedroom_options = [
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 10
+            ]
+
+            if bedrooms_min is not None and bedrooms_max is not None:
                 try:
-                    # Use select_option with the visible text of the desired option
-                    await sale_date_dropdown.select_option(label=preset_text)
-                    logger.debug(f"Selected Sale Date Range '{preset_text}'.")
-                except Exception as date_dropdown_error:
-                    logger.error(
-                        f"Error selecting Sale Date Range '{preset_text}': {date_dropdown_error}"
+                    logger.info("Finding bedroom boundaries...")
+                    # --- Select bedroom Min ---
+                    # Find the closest available *lower* boundary for the *minimum*
+                    closest_bedroom_min_option = find_closest_boundary_option(
+                        bedrooms_min, bedroom_options, is_upper_bound=False
                     )
-            else:
-                logger.warning("Sale Date Range dropdown element not found on page.")
+                    logger.info(
+                        f"Closest bedroom boundaries option: {closest_bedroom_min_option} for {bedrooms_min}")
 
-            # --- Trigger Search ---
-            logger.info(
-                "All filters applied (inputs and dropdowns). Clicking search/apply button..."
-            )
-            # Adjust selector for the search/apply button
-            search_button = page.locator(
-                "button.apply-filters-btn, button.search-btn"
-            )  # ADJUST SELECTOR
-            if await search_button.count() > 0:
-                await search_button.click()
-            else:
-                logger.error("Search/Apply button not found.")
-                cma_data["CMA_Status"] = "Failed: Search button not found"
-                return cma_data
+                    bedroom_dropdown = page.locator(
+                        f"label:text('Bedrooms') >> xpath=following-sibling::div//div[contains(@class, 'v-select__selection') and text()='{prev_bedrooms_min}']"
+                    )
 
-            # Wait for results to load (same as before)
-            logger.info("Waiting for CMA results to load...")
-            await page.wait_for_load_state("networkidle")
-            # ... (rest of the loop logic for checking results count, adjusting, etc.) ...
+                    logger.info(f"Bedroom dropdown found")
+
+                    if await bedroom_dropdown.count() > 0:
+                        logger.info("Found bedroom dropdown...")
+                        try:
+                            await select_from_dropdown(
+                                page, bedroom_dropdown, str(closest_bedroom_min_option)
+                            )
+                            logger.info("Clicked bedroom min dropdown...")
+                            await page.wait_for_timeout(
+                                1000
+                            )  # Brief wait for options to appear
+
+                            prev_bedrooms_min = closest_bedroom_min_option
+                            logger.info("Done")
+                            # Clicking the option often closes the dropdown automatically
+
+                        except Exception as dropdown_error:
+                            logger.error(
+                                f"Error selecting bedroom '{subject_bedrooms}' from dropdown: {dropdown_error}"
+                            )
+                    else:
+                        if not subject_bedrooms:
+                            logger.info("No bedroom to filter by.")
+                        else:
+                            logger.warning("Bedroom dropdown element not found on page.")
+                    await page.wait_for_timeout(2000)
+                    # --- Select bedroom max ---
+                    # Find the closest available *lower* boundary for the *maximum*
+                    closest_bedroom_max_option = find_closest_boundary_option(
+                        bedrooms_max, bedroom_options, is_upper_bound=True
+                    )
+                    logger.info(
+                        f"Closest bedroom boundaries option: {closest_bedroom_max_option} for {bedrooms_max}")
+
+                    bedroom_dropdown = page.locator(
+                        f"label:text('Bedrooms') >> xpath=following-sibling::div//div[contains(@class, 'v-select__selection') and text()='{prev_bedrooms_max}']"
+                    )
+
+                    logger.info(f"Bedroom dropdown found")
+
+                    if await bedroom_dropdown.count() > 0:
+                        logger.info("Found bedroom dropdown...")
+                        try:
+                            await select_from_dropdown(
+                                page, bedroom_dropdown, str(closest_bedroom_max_option)
+                            )
+                            logger.info("Clicked bedroom max dropdown...")
+                            await page.wait_for_timeout(
+                                1000
+                            )  # Brief wait for options to appear
+
+                            prev_bedrooms_max = closest_bedroom_max_option
+                            logger.info("Done")
+                            # Clicking the option often closes the dropdown automatically
+
+                        except Exception as dropdown_error:
+                            logger.error(
+                                f"Error selecting bedroom '{subject_bedrooms}' from dropdown: {dropdown_error}"
+                            )
+                    else:
+                        if not subject_bedrooms:
+                            logger.info("No bedroom to filter by.")
+                        else:
+                            logger.warning("Bedroom dropdown element not found on page.")
+                    await page.wait_for_timeout(2000)
+
+                except Exception as fa_error:
+                    logger.error(f"Error setting bedroom filters: {fa_error}")
+
+            # --- Handling bathroom Min/Max Dropdowns ---
+            logger.info("Applying bathroom filters...")
+
+            # Define the available boundary options for Floor Area (from inspection)
+            # MAKE SURE THIS LIST MATCHES THE ACTUAL OPTIONS IN THE RELAB DROPDOWN
+            # AND IS SORTED ASCENDINGLY
+            bathroom_options = [
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 10
+            ]
+
+            if bathrooms_min is not None and bathrooms_max is not None:
+                try:
+                    logger.info("Finding bathroom boundaries...")
+                    # --- Select bathroom Min ---
+                    # Find the closest available *lower* boundary for the *minimum*
+                    closest_bathroom_min_option = find_closest_boundary_option(
+                        bathrooms_min, bathroom_options, is_upper_bound=False
+                    )
+                    logger.info(
+                        f"Closest bathroom boundaries option: {closest_bathroom_min_option} for {bathrooms_min}")
+
+                    bathroom_dropdown = page.locator(
+                        f"label:text('bathrooms') >> xpath=following-sibling::div//div[contains(@class, 'v-select__selection') and text()='{prev_bathrooms_min}']"
+                    )
+
+                    logger.info(f"bathroom dropdown found")
+
+                    if await bathroom_dropdown.count() > 0:
+                        logger.info("Found bathroom dropdown...")
+                        try:
+                            await select_from_dropdown(
+                                page, bathroom_dropdown, str(closest_bathroom_min_option)
+                            )
+                            logger.info("Clicked bathroom min dropdown...")
+                            await page.wait_for_timeout(
+                                1000
+                            )  # Brief wait for options to appear
+
+                            prev_bathrooms_min = closest_bathroom_min_option
+                            logger.info("Done")
+                            # Clicking the option often closes the dropdown automatically
+
+                        except Exception as dropdown_error:
+                            logger.error(
+                                f"Error selecting bathroom '{subject_bathrooms}' from dropdown: {dropdown_error}"
+                            )
+                    else:
+                        if not subject_bathrooms:
+                            logger.info("No bathroom to filter by.")
+                        else:
+                            logger.warning("bathroom dropdown element not found on page.")
+                    await page.wait_for_timeout(2000)
+                    # --- Select bathroom max ---
+                    # Find the closest available *lower* boundary for the *maximum*
+                    closest_bathroom_max_option = find_closest_boundary_option(
+                        bathrooms_max, bathroom_options, is_upper_bound=True
+                    )
+                    logger.info(
+                        f"Closest bathroom boundaries option: {closest_bathroom_max_option} for {bathrooms_max}")
+
+                    bathroom_dropdown = page.locator(
+                        f"label:text('bathrooms') >> xpath=following-sibling::div//div[contains(@class, 'v-select__selection') and text()='{prev_bathrooms_max}']"
+                    )
+
+                    logger.info(f"bathroom dropdown found")
+
+                    if await bathroom_dropdown.count() > 0:
+                        logger.info("Found bathroom dropdown...")
+                        try:
+                            await select_from_dropdown(
+                                page, bathroom_dropdown, str(closest_bathroom_max_option)
+                            )
+                            logger.info("Clicked bathroom max dropdown...")
+                            await page.wait_for_timeout(
+                                1000
+                            )  # Brief wait for options to appear
+
+                            prev_bathrooms_max = closest_bathroom_max_option
+                            logger.info("Done")
+                            # Clicking the option often closes the dropdown automatically
+
+                        except Exception as dropdown_error:
+                            logger.error(
+                                f"Error selecting bathroom '{subject_bathrooms}' from dropdown: {dropdown_error}"
+                            )
+                    else:
+                        if not subject_bathrooms:
+                            logger.info("No bathroom to filter by.")
+                        else:
+                            logger.warning("bathroom dropdown element not found on page.")
+                    await page.wait_for_timeout(2000)
+
+                except Exception as fa_error:
+                    logger.error(f"Error setting bathroom filters: {fa_error}")
+
+
+            # --- Handling year built Min/Max Dropdowns ---
+            logger.info("Applying year built filters...")
+
+            # Define the available boundary options for Floor Area (from inspection)
+            # MAKE SURE THIS LIST MATCHES THE ACTUAL OPTIONS IN THE RELAB DROPDOWN
+            # AND IS SORTED ASCENDINGLY
+            year_built_options = [
+                1900, 1910, 1920, 1930, 1940, 1950, 1960, 1970, 1980, 1990, 2000, 2010, 2020,
+            ]
+
+            if year_built_min is not None and year_built_max is not None:
+                try:
+                    logger.info("Finding year built boundaries...")
+                    # --- Select year built Min ---
+                    # Find the closest available *lower* boundary for the *minimum*
+                    closest_year_built_min_option = find_closest_boundary_option(
+                        year_built_min, year_built_options, is_upper_bound=False
+                    )
+                    logger.info(
+                        f"Closest year built boundaries option: {closest_year_built_min_option} for {year_built_min}")
+
+                    year_built_dropdown = page.locator(
+                        f"label:text('Build era') >> xpath=following-sibling::div//div[contains(@class, 'v-select__selection') and text()='{prev_year_built_min}']"
+                    )
+
+                    logger.info(f"year built dropdown found")
+
+                    if await year_built_dropdown.count() > 0:
+                        logger.info("Found year built dropdown...")
+                        try:
+                            await select_from_dropdown(
+                                page, year_built_dropdown, str(closest_year_built_min_option)
+                            )
+                            logger.info("Clicked year built min dropdown...")
+                            await page.wait_for_timeout(
+                                1000
+                            )  # Brief wait for options to appear
+
+                            prev_year_built_min = closest_year_built_min_option
+                            logger.info("Done")
+                            # Clicking the option often closes the dropdown automatically
+
+                        except Exception as dropdown_error:
+                            logger.error(
+                                f"Error selecting year built '{subject_year_built}' from dropdown: {dropdown_error}"
+                            )
+                    else:
+                        if not subject_year_built:
+                            logger.info("No year built to filter by.")
+                        else:
+                            logger.warning("year built dropdown element not found on page.")
+                    await page.wait_for_timeout(2000)
+                    # --- Select year built max ---
+                    # Find the closest available *lower* boundary for the *maximum*
+                    closest_year_built_max_option = find_closest_boundary_option(
+                        year_built_max, year_built_options, is_upper_bound=False
+                    )
+                    logger.info(
+                        f"Closest year built boundaries option: {closest_year_built_max_option} for {year_built_max}")
+
+                    year_built_dropdown = page.locator(
+                        f"label:text('Build era') >> xpath=following-sibling::div//div[contains(@class, 'v-select__selection') and text()='{prev_year_built_max}']"
+                    )
+
+                    logger.info(f"year built dropdown found")
+
+                    if await year_built_dropdown.count() > 0:
+                        logger.info("Found year built dropdown...")
+                        try:
+                            await select_from_dropdown(
+                                page, year_built_dropdown, str(closest_year_built_max_option)
+                            )
+                            logger.info("Clicked year built max dropdown...")
+                            await page.wait_for_timeout(
+                                1000
+                            )  # Brief wait for options to appear
+
+                            prev_year_built_max = closest_year_built_max_option
+                            logger.info("Done")
+                            # Clicking the option often closes the dropdown automatically
+
+                        except Exception as dropdown_error:
+                            logger.error(
+                                f"Error selecting year built '{subject_year_built}' from dropdown: {dropdown_error}"
+                            )
+                    else:
+                        if not subject_year_built:
+                            logger.info("No year built to filter by.")
+                        else:
+                            logger.warning("year built dropdown element not found on page.")
+                    await page.wait_for_timeout(2000)
+
+                except Exception as fa_error:
+                    logger.error(f"Error setting bathroom filters: {fa_error}")
+
+            # --- Handling land Area Min/Max Dropdowns ---
+            logger.info("Applying land area filters...")
+
+            # Define the available boundary options for land Area (from inspection)
+            # MAKE SURE THIS LIST MATCHES THE ACTUAL OPTIONS IN THE RELAB DROPDOWN
+            # AND IS SORTED ASCENDINGLY
+            land_area_options = [
+                50, 75, 100, 150, 200, 300, 400, 500, 750, 1000, 2000, 3000, 4000, 5000, 10000, 20000, 40000, 50000, 100000, 150000, 200000, 250000, 500000, 1000000, 1500000, 2000000,
+            ]
+
+            if land_area_min is not None and land_area_max is not None:
+                try:
+                    logger.info("Finding land area boundaries...")
+                    # --- Select land Area Min ---
+                    # Find the closest available *lower* boundary for the *minimum*
+                    closest_land_area_min_option = find_closest_boundary_option(
+                        land_area_min, land_area_options, is_upper_bound=False
+                    )
+                    # if greater than 10000, change to ha
+
+                    logger.info(
+                        f"Closest land area boundaries option: {closest_land_area_min_option} for {land_area_min}")
+
+                    land_area_dropdown = page.locator(
+                        f"label:text('land area') >> xpath=following-sibling::div//div[contains(@class, 'v-select__selection') and text()='{prev_land_area_min}']"
+                    )
+
+                    logger.info(f"land area dropdown found")
+
+                    if await land_area_dropdown.count() > 0:
+                        logger.info("Found land area dropdown...")
+                        try:
+                            if closest_land_area_min_option >= 10000:
+                                closest_land_area_min_option /= 10000
+                                await select_from_dropdown(
+                                    page, land_area_dropdown, str(closest_land_area_min_option)+"ha"
+                                )
+                                prev_land_area_min = closest_land_area_min_option * 10000
+                            else:
+                                await select_from_dropdown(
+                                    page, land_area_dropdown, str(closest_land_area_min_option)
+                                )
+                                prev_land_area_min = closest_land_area_min_option
+                            logger.info("Clicked land area min dropdown...")
+                            await page.wait_for_timeout(
+                                1000
+                            )  # Brief wait for options to appear
+
+                            logger.info("Done")
+                            # Clicking the option often closes the dropdown automatically
+
+                        except Exception as dropdown_error:
+                            logger.error(
+                                f"Error selecting land area '{subject_land_area_sqm}' from dropdown: {dropdown_error}"
+                            )
+                    else:
+                        if not subject_land_area_sqm:
+                            logger.info("No land area to filter by.")
+                        else:
+                            logger.warning("land area dropdown element not found on page.")
+                    await page.wait_for_timeout(2000)
+                    # --- Select land Area Max ---
+                    # Find the closest available *lower* boundary for the *maximum*
+                    closest_land_area_max_option = find_closest_boundary_option(
+                        land_area_max, land_area_options, is_upper_bound=True
+                    )
+                    logger.info(
+                        f"Closest land area boundaries option: {closest_land_area_max_option} for {land_area_max}")
+
+                    land_area_dropdown = page.locator(
+                        f"label:text('Land area') >> xpath=following-sibling::div//div[contains(@class, 'v-select__selection') and text()='{prev_land_area_max}']"
+                    )
+
+                    logger.info(f"land area dropdown found")
+
+                    if await land_area_dropdown.count() > 0:
+                        logger.info("Found land area dropdown...")
+                        try:
+                            if closest_land_area_max_option >= 10000:
+                                closest_land_area_max_option /= 10000
+                                await select_from_dropdown(
+                                    page, land_area_dropdown, str(closest_land_area_max_option) + "ha"
+                                )
+                                prev_land_area_max = closest_land_area_max_option * 10000
+                            else:
+                                await select_from_dropdown(
+                                    page, land_area_dropdown, str(closest_land_area_max_option)
+                                )
+                                prev_land_area_max = closest_land_area_max_option
+                            logger.info("Clicked land area max dropdown...")
+                            await page.wait_for_timeout(
+                                1000
+                            )  # Brief wait for options to appear
+
+                            logger.info("Done")
+                            # Clicking the option often closes the dropdown automatically
+
+                        except Exception as dropdown_error:
+                            logger.error(
+                                f"Error selecting land area '{subject_land_area_sqm}' from dropdown: {dropdown_error}"
+                            )
+                    else:
+                        if not subject_land_area_sqm:
+                            logger.info("No land area to filter by.")
+                        else:
+                            logger.warning("land area dropdown element not found on page.")
+                    await page.wait_for_timeout(1000)
+
+                except Exception as fa_error:
+                    logger.error(f"Error setting land Area filters: {fa_error}")
 
             # --- Check Results Count ---
             result_count = 0
             try:
                 # Adjust selector for the element displaying the number of results
                 # It might be text like "Found 15 comparable sales" or just a number
-                results_text_element = page.locator(
-                    "div.results-count-display, span.comparables-found"
-                )  # Adjust
-                results_text = await results_text_element.text_content(timeout=10000)
+                results_locator = page.locator("div.text-start span.font-weight-bold")
+                results_text = await results_locator.text_content()
                 logger.debug(f"Raw results text: '{results_text}'")
                 # Extract number using regex
                 count_match = re.search(r"(\d+)", results_text)
                 if count_match:
-                    result_count = int(count_match.group(1))
+                    result_count = int(count_match.group(0))
                 logger.info(
                     f"Iteration {iteration_count}: Found {result_count} comparable sales."
                 )
@@ -751,18 +1221,18 @@ async def perform_cma_analysis(page, subject_property_data):
                     f"Could not determine result count: {e}. Assuming results are displayed."
                 )
                 # If we can't get the count easily, proceed to try extracting data
-                # and determine count from the list of extracted comparables.
+                # and determine count from the list of extracted comparable.
 
             # --- Evaluate Result Count and Adjust Filters ---
             if target_min_comps <= result_count <= target_max_comps:
                 logger.info(
-                    f"Iteration {iteration_count}: Target number of comparables ({result_count}) achieved."
+                    f"Iteration {iteration_count}: Target number of comparable ({result_count}) achieved."
                 )
-                cma_data["CMA_Status"] = f"Success: Found {result_count} comparables"
+                cma_data["CMA_Status"] = f"Success: Found {result_count} comparable"
                 break  # Success, exit loop
             elif result_count < target_min_comps:
                 logger.info(
-                    f"Iteration {iteration_count}: Too few comparables ({result_count}). Loosening filters."
+                    f"Iteration {iteration_count}: Too few comparable ({result_count}). Loosening filters."
                 )
                 # Loosen filters: Increase tolerance
                 initial_tolerance_percent += tolerance_step_percent
@@ -781,7 +1251,7 @@ async def perform_cma_analysis(page, subject_property_data):
 
             elif result_count > target_max_comps:
                 logger.info(
-                    f"Iteration {iteration_count}: Too many comparables ({result_count}). Tightening filters."
+                    f"Iteration {iteration_count}: Too many comparable ({result_count}). Tightening filters."
                 )
                 # Tighten filters: Decrease tolerance
                 initial_tolerance_percent = max(
@@ -810,133 +1280,48 @@ async def perform_cma_analysis(page, subject_property_data):
             )
 
         # --- 5. Extract Comparable Sales Data ---
-        comparable_properties = []
-        logger.info("Extracting data for comparable properties...")
-        try:
-            # Adjust selector for the results table rows
-            comparable_rows = await page.locator(
-                "table.cma-results-table tbody tr"
-            ).all()  # Adjust selector
-            logger.info(f"Located {len(comparable_rows)} rows in the results table.")
+        properties = []
+        Avg_Sale_CV = 0
+        Avg_Land_Value = 0
+        Avg_Floor_Value = 0
+        cards = page.locator("div.row.pt-2 div.text-start.p-1.col.col-12")
+        count = await cards.count()
+        logger.info(f"Extracting data for {count} comparable properties...")
+        for i in range(count):
+            card = cards.nth(i)
 
-            for i, row in enumerate(comparable_rows):
-                try:
-                    # Adjust column indices and selectors based on actual table structure
-                    cols = await row.locator("td").all()
-                    if len(cols) < 6:  # Ensure enough columns exist
-                        logger.warning(f"Skipping row {i+1}, insufficient columns.")
-                        continue
+            comparable_text = await card.text_content()
 
-                    # Example column mapping (ADJUST INDICES AND SELECTORS):
-                    # 0: Address, 1: Price, 2: CV, 3: Floor Area, 4: Land Area, 5: Bed/Bath, 6: Sale Date
-                    comp_address = (await cols[0].text_content()).strip()
-                    price_text = await cols[1].text_content()  # e.g., "$1,200,000"
-                    cv_text = await cols[2].text_content()  # e.g., "$1,100,000"
-                    floor_area_text = await cols[3].text_content()  # e.g., "200 m²"
-                    land_area_text = await cols[4].text_content()  # e.g., "500 m²"
-                    # Bed/Bath might be combined or separate
-                    bed_bath_text = await cols[
-                        5
-                    ].text_content()  # e.g., "4 beds, 3 baths"
-                    sale_date_text = await cols[
-                        6
-                    ].text_content()  # e.g., "Sold 15 Aug 2023"
+            logger.info(f"Index {i}: Found {comparable_text}")
 
-                    # --- Parse Extracted Data ---
-                    comp_price = None
-                    price_match = re.search(r"\$([0-9,]+)", price_text)
-                    if price_match:
-                        comp_price = int(price_match.group(1).replace(",", ""))
+            patterns = {
+                "CV": r"CV:\$?([\d.,]+M?)",
+                "Sale/CV": r"Sale/CV:([-\d%]+)",
+                "Land": r"Land:\s*\$([\d,]+)",
+                "Floor": r"Floor:\s*\$([\d,]+)",
+            }
 
-                    comp_cv = None
-                    cv_match = re.search(r"\$([0-9,]+)", cv_text)
-                    if cv_match:
-                        comp_cv = int(cv_match.group(1).replace(",", ""))
+            results = {}
+            for key, pat in patterns.items():
+                match = re.search(pat, comparable_text)
+                if match:
+                    raw = match.group(1)
+                    if key == "Sale/CV":
+                        # percentage → decimal
+                        results[key] = float(raw.strip("%")) / 100
+                    else:
+                        results[key] = normalize_number(raw)
 
-                    comp_floor_area_sqm = None
-                    fa_match = re.search(
-                        r"([0-9,]+)", floor_area_text
-                    )  # Assumes m² unit
-                    if fa_match:
-                        comp_floor_area_sqm = float(fa_match.group(1).replace(",", ""))
+            properties.append(results)
 
-                    comp_land_area_sqm = None
-                    la_match = re.search(
-                        r"([0-9,]+)", land_area_text
-                    )  # Assumes m² unit
-                    if la_match:
-                        comp_land_area_sqm = float(la_match.group(1).replace(",", ""))
+        logger.info(f"extracted entries: {properties}")
 
-                    # Parse Bed/Bath from combined text or separate (example assumes combined)
-                    comp_bedrooms = comp_bathrooms = None
-                    bed_match = re.search(r"(\d+)\s*bed", bed_bath_text, re.IGNORECASE)
-                    bath_match = re.search(
-                        r"(\d+)\s*bath", bed_bath_text, re.IGNORECASE
-                    )
-                    if bed_match:
-                        comp_bedrooms = int(bed_match.group(1))
-                    if bath_match:
-                        comp_bathrooms = int(bath_match.group(1))
-
-                    comp_sale_date_dt = parse_sale_date(sale_date_text)
-
-                    comp_data = {
-                        "address": comp_address,
-                        "price_nzd": comp_price,
-                        "cv_nzd": comp_cv,
-                        "floor_area_sqm": comp_floor_area_sqm,
-                        "land_area_sqm": comp_land_area_sqm,
-                        "bedrooms": comp_bedrooms,
-                        "bathrooms": comp_bathrooms,
-                        "sale_date": (
-                            comp_sale_date_dt.strftime("%d/%m/%Y")
-                            if comp_sale_date_dt
-                            else None
-                        ),
-                    }
-                    comparable_properties.append(comp_data)
-                    logger.debug(f"Extracted comp {i+1}: {comp_data}")
-
-                except Exception as row_error:
-                    logger.warning(
-                        f"Error extracting data for comparable row {i+1}: {row_error}"
-                    )
-                    continue  # Continue with the next row
-
-        except Exception as extraction_error:
-            logger.error(
-                f"Error locating or iterating through comparable rows: {extraction_error}"
-            )
-            cma_data["CMA_Status"] = f"Failed during extraction: {extraction_error}"
-            # Return partial data if possible
-            cma_data.update(
-                {
-                    "CMA_Comparables_Count": len(comparable_properties),
-                    "CMA_Comparables_Details": comparable_properties,
-                    "CMA_Iterations_Performed": iteration_count,
-                    "CMA_Filter_Settings_Used": {
-                        "Land Title": subject_land_title,
-                        "Land Area Min (m²)": land_area_min,
-                        "Land Area Max (m²)": land_area_max,
-                        "Floor Area Min (m²)": floor_area_min,
-                        "Floor Area Max (m²)": floor_area_max,
-                        "Bedrooms Min": bedrooms_min,
-                        "Bedrooms Max": bedrooms_max,
-                        "Bathrooms Min": bathrooms_min,
-                        "Bathrooms Max": bathrooms_max,
-                        "Year Built Min": build_year_min,
-                        "Year Built Max": build_year_max,
-                        "Sale Date Range": "Last 12 months (assumed)",
-                    },
-                }
-            )
-            return cma_data  # Return what we have, marked as failed
-
+        input("pause")
         # --- 6. Calculate Benchmarks ---
         logger.info("Calculating CMA benchmarks based on extracted comparables...")
-        cma_data["CMA_Comparables_Count"] = len(comparable_properties)
-        cma_data["CMA_Comparables_Details"] = (
-            comparable_properties  # Store detailed list
+        cma_data["CMA_Comparable_Count"] = len(properties)
+        cma_data["CMA_Comparable_Details"] = (
+            properties  # Store detailed list
         )
         cma_data["CMA_Iterations_Performed"] = iteration_count
         cma_data["CMA_Filter_Settings_Used"] = {
@@ -949,8 +1334,8 @@ async def perform_cma_analysis(page, subject_property_data):
             "Bedrooms Max": bedrooms_max,
             "Bathrooms Min": bathrooms_min,
             "Bathrooms Max": bathrooms_max,
-            "Year Built Min": build_year_min,
-            "Year Built Max": build_year_max,
+            "Year Built Min": year_built_min,
+            "Year Built Max": year_built_max,
             "Sale Date Range": "Last 12 months (assumed)",
         }
 
@@ -1047,25 +1432,22 @@ async def perform_cma_analysis(page, subject_property_data):
 async def run_playwright_task(address):
     """Main Playwright task to login, search, select, and extract data."""
     logger.info(f"Starting Playwright task for address: {address}")
-    async with Stealth().use_async(async_playwright()) as p:
-        user_data_dir = "/home/sif/playwright-profile"
+    async with async_playwright() as p:
+        user_data_dir = r"C:\Users\admin\Desktop\BeeBee AI\Relab\relab-trade-me-integration\playwright-profile"
         browser = await p.firefox.launch_persistent_context(
             user_data_dir=user_data_dir,
             headless=False,
             ignore_https_errors=True,
-        )
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
-            viewport={"width": 1280, "height": 800},
-            locale="en-NZ",
-            timezone_id="Pacific/Auckland",
             extra_http_headers={
                 "referer": "https://relab.co.nz/",
                 "origin": "https://relab.co.nz",
                 "accept-language": "en-US,en;q=0.9,zh-CN;q=0.8,zh-HK;q=0.7,zh-TW;q=0.6,zh;q=0.5",
             },
+            locale="en-NZ",
+            timezone_id="Pacific/Auckland",
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
         )
-        page = await context.new_page()
+        page = await browser.new_page()
 
         try:
             await login_to_relab(page)
@@ -1092,76 +1474,7 @@ async def run_playwright_task(address):
             return {"success": False, "error": str(e)}
         finally:
             await page.close()
-            await context.close()
             await browser.close()
-
-
-def parse_list_date(date_text: str) -> str:
-    """Parses 'Listed: Mon, 4 Aug' or 'Listed: Today' into 'dd/mm/yyyy'."""
-    if not date_text:
-        return None
-    date_text = date_text.strip()
-    try:
-        if "today" in date_text.lower():
-            # Return today's date formatted as dd/mm/yyyy
-            return (
-                datetime.now(timezone(timedelta(hours=12)))
-                .astimezone(timezone.utc)
-                .strftime("%d/%m/%Y")
-            )
-        elif "yesterday" in date_text.lower():
-            # Return yesterday's date formatted as dd/mm/yyyy
-            return (
-                datetime.now(timezone(timedelta(hours=12))).astimezone(timezone.utc)
-                - timedelta(days=1)
-            ).strftime("%d/%m/%Y")
-        else:
-            # Assume format like "Listed: Mon, 4 Aug"
-            # Remove "Listed:" prefix
-            date_part = date_text.split(":", 1)[1].strip()  # Split on first ':'
-            # Parse the date string like "Mon, 4 Aug"
-            current_date = datetime.now(timezone(timedelta(hours=12))).astimezone(
-                timezone.utc
-            )
-            current_year = current_date.year
-
-            # Try current year first
-            try:
-                parsed_date = datetime.strptime(
-                    f"{date_part} {current_year}", "%a, %d %b %Y"
-                )
-
-                # Make parsed_date timezone-aware for comparison
-                parsed_date = parsed_date.replace(tzinfo=timezone(timedelta(hours=12)))
-
-                # If the parsed date is in the future (e.g., Sep 15 when today is Aug 25),
-                # it means the listing is from last year
-                if parsed_date > current_date:
-                    parsed_date = datetime.strptime(
-                        f"{date_part} {current_year - 1}", "%a, %d %b %Y"
-                    )
-                    parsed_date = parsed_date.replace(
-                        tzinfo=timezone(timedelta(hours=12))
-                    )
-
-                return parsed_date.strftime("%d/%m/%Y")
-            except ValueError:
-                # If current year fails, try previous year
-                try:
-                    parsed_date = datetime.strptime(
-                        f"{date_part} {current_year - 1}", "%a, %d %b %Y"
-                    )
-                    parsed_date = parsed_date.replace(
-                        tzinfo=timezone(timedelta(hours=12))
-                    )
-                    return parsed_date.strftime("%d/%m/%Y")
-                except ValueError:
-                    # If both fail, return None
-                    return None
-
-    except Exception as e:
-        print(f"\n⚠️ Error parsing list date '{date_text}': {e}")
-        return None
 
 
 # --- Flask Routes ---
